@@ -19,8 +19,10 @@ def load_data():
     df = build_features(clean(df_raw, config), config)
     df['store'] = df['store'].astype('category')
     _, _, test_df = chronological_split(df, config)
-    fc = pd.read_csv('outputs/forecasts/test_forecasts.csv', parse_dates=['date'])
-    per_store = pd.read_csv('outputs/forecasts/per_store_metrics.csv', index_col=0)
+    fc_path = Path('outputs/forecasts/test_forecasts.csv')
+    ps_path = Path('outputs/forecasts/per_store_metrics.csv')
+    fc = pd.read_csv(fc_path, parse_dates=['date']) if fc_path.exists() else None
+    per_store = pd.read_csv(ps_path, index_col=0) if ps_path.exists() else None
     return test_df, fc, per_store
 
 test_df, fc, per_store = load_data()
@@ -28,6 +30,10 @@ test_df, fc, per_store = load_data()
 st.title("📈 Model Performance")
 st.markdown("*How well does the LightGBM quantile model forecast weekly demand?*")
 st.divider()
+
+if fc is None or per_store is None:
+    st.warning("⚠️ Model performance artifacts not found in `outputs/forecasts/`. Please run `python run_pipeline.py` to generate forecasts and model metrics.")
+    st.stop()
 
 # ── Model Comparison Metrics ────────────────────────────────────────────────
 st.subheader("Test-Set Model Comparison")

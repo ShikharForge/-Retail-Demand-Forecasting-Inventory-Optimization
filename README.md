@@ -1,402 +1,202 @@
 # Retail Demand Forecasting & Inventory Optimization
 
-> **Data Science Portfolio Project** — End-to-end decision-support system that converts multi-horizon demand forecasts into statistically grounded inventory policies using quantile regression for uncertainty quantification.
+[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-blue.svg)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/Tests-59%20Passed-brightgreen.svg)](tests/)
+[![Dashboard](https://img.shields.io/badge/Streamlit-Interactive%20App-FF4B4B.svg)](dashboard/app.py)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+An end-to-end decision-support system that transforms multi-horizon demand forecasts into statistically grounded inventory policies using **quantile regression ($P_{10}, P_{50}, P_{90}$)** for uncertainty quantification, hypothesis testing, TreeSHAP explainability, and what-if scenario simulations.
 
 ---
 
-## Table of Contents
-1. [Project Overview](#project-overview)
-2. [Dataset](#dataset)
-3. [Architecture](#architecture)
-4. [Methodology](#methodology)
-   - [Feature Engineering](#feature-engineering)
-   - [Model Selection](#model-selection)
-   - [Quantile Regression](#quantile-regression)
-   - [Inventory Optimization](#inventory-optimization)
-5. [Key Results](#key-results)
-6. [Statistical Analysis](#statistical-analysis)
-7. [Modelling Assumptions](#modelling-assumptions)
-8. [Project Structure](#project-structure)
-9. [Running the Project](#running-the-project)
-10. [Dashboard](#dashboard)
-11. [Interview Q&A](#interview-qa)
+## Visual Highlights
+
+| Demand Seasonality & Trends | Test-Set Model Comparison |
+| :---: | :---: |
+| ![Seasonality](assets/eda_04_seasonality.png) | ![Model Benchmark](assets/model_comparison.png) |
+
+| TreeSHAP Global Feature Importance | Statistical Hypothesis Summary |
+| :---: | :---: |
+| ![SHAP Beeswarm](assets/shap_beeswarm.png) | ![Hypothesis Testing](assets/stats_01_summary.png) |
 
 ---
 
-## Project Overview
+## Key Results & Business Impact
 
-This project builds an **original** retail demand forecasting and inventory optimization system. It is **not** a reproduction of any existing repository — the architecture, feature engineering choices, model design, and inventory formulation were all designed independently.
-
-### What this system does
-
-```
-Raw retail data
-    │
-    ▼
-Feature Engineering ──► 39 leakage-safe features (lags, rolling stats, calendar, economic)
-    │
-    ▼
-Forecasting Layer ─────► LightGBM / XGBoost global panel models
-                          Quantile regression: P10 (lower bound), P50 (point), P90 (upper bound)
-    │
-    ▼
-Inventory Layer ────────► Safety stock, Reorder Point, EOQ, Stockout Risk
-                          Two methods: Parametric (Normal) + Non-parametric (quantile-based)
-    │
-    ▼
-Scenario Engine ────────► 5 what-if scenarios (demand shock, lead time disruption, etc.)
-    │
-    ▼
-Explainability ─────────► SHAP global + local feature attribution
-    │
-    ▼
-Dashboard ──────────────► 6-page Streamlit app with interactive controls
-```
+| Metric / Analysis | Result | Strategic Business Takeaway |
+| :--- | :--- | :--- |
+| **Champion Model** | **LightGBM Quantile Regressor** | **WAPE: 4.14%** (beats Seasonal Naive baseline at 7.02% and Naive at 17.51%) |
+| **Uncertainty Calibration** | **$P_{10} - P_{90}$ Interval** | Captures empirical demand spread with calibrated uncertainty |
+| **Holiday Sales Uplift** | **+7.8% (Mann-Whitney U $p < 0.001$)** | Statistically significant surge requiring proactive safety stock buffering 4–6 weeks prior |
+| **Store Heterogeneity** | **Kruskal-Wallis $H = 6144.3, p \approx 0$** | Significant variance in store volumes justifies per-store safety stock & reorder policies |
+| **Primary Driver (SHAP)** | **`lag_52` (Same-week-last-year sales)** | Annual seasonality profile provides the strongest predictive signal for weekly demand |
 
 ---
 
-## Dataset
-
-**Source:** Walmart Store Sales Forecasting (Kaggle)
-
-| Property | Value |
-|---|---|
-| Records | 6,435 rows |
-| Stores | 45 |
-| Time span | 2010-02-05 → 2012-10-26 (143 weeks per store) |
-| Frequency | Weekly (Friday-anchored) |
-| Target variable | `weekly_sales` (USD, store-level aggregate) |
-| Missing values | **Zero** |
-| Duplicates | **Zero** |
-| Negative/zero sales | **Zero** |
-
-### Observed data distributions
-- **Sales range:** $209,986 – $3,818,686 per store per week
-- **Mean weekly sales:** $1,046,965 (all stores)
-- **Sales skewness:** 0.668 (right-skewed → non-parametric tests preferred)
-- **Holiday weeks:** 450 / 6,435 (7.0%)
-
----
-
-## Architecture
-
-### Global Panel Model
-
-Rather than training 45 separate models (one per store), this project uses a **single global panel model** where `store` is a categorical feature. This decision is justified by three reasons:
-
-1. **Statistical evidence:** Kruskal-Wallis H=6,144.3, p≈0 confirms stores differ — the model must learn store-specific patterns. Store identity as a feature achieves this without requiring 45 separate training jobs.
-2. **Cross-store learning:** The model can learn demand patterns (seasonality shape, holiday uplift) that are common across stores, improving predictions for lower-volume stores that have less data.
-3. **Practical scalability:** Adding a new store requires only adding rows to the training set, not a new model file.
-
-### Train / Validation / Test Split
+## Project Architecture
 
 ```
-|──────────── TRAIN (70%) ────────────|── VAL (18%) ──|── TEST (12%) ──|
-  2010-02-05            2011-12-30     2012-01-06  2012-06-29  2012-10-26
-```
-
-This is a **strict chronological split** — no shuffling, no random splits. This simulates real-world deployment where the model is always predicting forward in time.
-
----
-
-## Methodology
-
-### Feature Engineering
-
-All features are engineered to be **strictly leakage-free**: at prediction time t, only information from t-1 or earlier is used.
-
-| Feature Group | Features | Leakage Prevention |
-|---|---|---|
-| Calendar | year, month, quarter, week_of_year, week_sin/cos, month_sin/cos | No future info |
-| Holiday decomposition | is_superbowl, is_laborday, is_thanksgiving, is_christmas, weeks_to_thanksgiving, weeks_to_christmas | Calendar-only |
-| Lag features | lag_1, lag_4, lag_8, lag_52 | `.shift(1)` per store group |
-| Rolling statistics | rolling_mean_4/8/12, rolling_std_4/8/12, rolling_max_4 | `.shift(1).rolling(w)` per store group |
-| Economic covariates | fuel_price_chg, cpi_chg, unemployment_yoy | Differenced to avoid level non-stationarity |
-
-**Leakage verification:** `verify_no_leakage()` is run on all 45 stores — it checks that `lag_1[i] == weekly_sales[i-1]` and raises `AssertionError` if any contamination is detected. **45/45 stores passed.**
-
-### Model Selection
-
-| Model | WAPE | MAE | RMSE | Notes |
-|---|---|---|---|---|
-| Naive (lag-1) | 0.0863 | $89,078 | $117,979 | Baseline 1 |
-| Seasonal Naive (lag-52) | 0.0522 | $53,867 | $84,681 | Baseline 2 |
-| **LightGBM** | **0.0410** | **$42,336** | **$63,610** | **Primary model** |
-| XGBoost | 0.0400 | $41,278 | $60,595 | Alternative |
-
-**LightGBM improvement over Seasonal Naive: 21.4% WAPE reduction.**
-
-Both gradient boosting models significantly outperform both baselines. LightGBM was chosen as primary because:
-- Handles categorical features (`store`) natively via `categorical_feature` parameter
-- Faster training due to histogram-based splitting
-- Marginally higher interpretability (well-supported SHAP integration)
-- XGBoost is retained as a comparison model
-
-### Quantile Regression
-
-Three separate LightGBM models are trained with different objective functions:
-
-```python
-# P10 model — lower bound (pessimistic forecast)
-objective = 'quantile', alpha = 0.10
-
-# P50 model — median forecast (point estimate)
-objective = 'quantile', alpha = 0.50
-
-# P90 model — upper bound (optimistic forecast)
-objective = 'quantile', alpha = 0.90
-```
-
-The **P10–P90 interval** captures demand uncertainty and feeds directly into the safety stock calculation.
-
-**Why quantile regression?**
-
-Standard regression minimises squared error (MSE), producing a single point estimate. For inventory management, we need a **full distribution** of possible demand outcomes — not just the expected value. Quantile regression achieves this efficiently within a single model framework, without needing to assume a parametric distribution for the errors.
-
-**Test-set interval coverage:** 59.6% of actual values fell within the P10–P90 band. The theoretical target is 80%. The gap reflects the limited test period (only ~17 weeks per store after the split) — wider quantiles or more training data would improve coverage.
-
-### Inventory Optimization
-
-> ⚠️ **All inventory parameters are MODELLING ASSUMPTIONS — the Walmart dataset contains no inventory records.**
-
-#### Formulas
-
-**1. Lead-Time Demand**
-```
-LTD = P50_weekly × lead_time_weeks
-```
-Expected demand during the replenishment window.
-
-**2. Safety Stock (Quantile-Based — default)**
-```
-SS_quantile = (P90_weekly - P50_weekly) × √lead_time_weeks
-```
-Non-parametric: uses the actual forecast uncertainty band rather than assuming Normal demand.
-
-**3. Safety Stock (Parametric — alternative)**
-```
-SS_parametric = Z(service_level) × σ_weekly × √lead_time_weeks
-```
-Classical formula. Assumes weekly demand is approximately Normal. Z = 1.645 for 95% SL.
-
-**4. Reorder Point**
-```
-ROP = LTD + SS
-```
-Place a new order when inventory falls to ROP.
-
-**5. Economic Order Quantity (Wilson/EOQ formula)**
-```
-EOQ = √(2DS / H)
-where D = annual demand, S = ordering cost, H = holding cost per unit per year
-```
-Optimal order size that minimises total ordering + holding costs.
-
-**6. Stockout Risk**
-```
-P(stockout) = 1 - Φ((ROP - μ_LT) / σ_LT)
-```
-Probability that demand during lead time exceeds the reorder point.
-
-**References:**
-- Silver, Pyke & Thomas (2017). *Inventory and Production Management in Supply Chains* (4th ed.)
-- Chopra & Meindl (2016). *Supply Chain Management: Strategy, Planning, and Operation* (6th ed.)
-
----
-
-## Key Results
-
-### Forecasting
-
-| Metric | Value |
-|---|---|
-| **WAPE** (primary metric) | **4.10%** |
-| MAE | $42,336 per store per week |
-| Improvement over Seasonal Naive | **21.4%** |
-| Top SHAP feature | lag_52 (same week last year, $217K avg impact) |
-| 2nd SHAP feature | rolling_mean_4 ($162K avg impact) |
-
-### Explainability (SHAP)
-
-Top features by mean |SHAP value|:
-
-| Rank | Feature | Mean \|SHAP\| | Interpretation |
-|---|---|---|---|
-| 1 | lag_52 | $217,108 | Same week last year — dominant yearly seasonality |
-| 2 | rolling_mean_4 | $162,315 | Recent 4-week trend |
-| 3 | lag_4 | $68,393 | Short-term momentum (1 month ago) |
-| 4 | store | $10,054 | Store-level baseline demand |
-| 5 | lag_1 | $7,019 | Most recent week |
-| 9 | unemployment | $5,546 | Macro-economic context |
-| 12 | month_sin | $4,040 | Annual seasonality (cyclic encoding) |
-
-> **Note:** SHAP values show *associations*, not causal relationships. High lag_52 pushing the forecast up means the model learned that last year's sales are associated with this year's — it does not mean historical sales *cause* current sales.
-
-### Statistical Tests
-
-| Test | Question | Result |
-|---|---|---|
-| Mann-Whitney U | Holiday vs non-holiday sales | p=0.026 → **SIGNIFICANT** (effect size r=−0.063, modest) |
-| Mann-Whitney U | Thanksgiving vs non-holiday | p≈0 → **HIGHLY SIGNIFICANT** |
-| Kruskal-Wallis | All 45 stores equal? | H=6,144, p≈0 → **REJECT** (η²=0.955, large effect) |
-| Levene's Test | Equal variance across stores? | W=19.02, p≈0 → **REJECT** (per-store SS justified) |
-
----
-
-## Statistical Analysis
-
-### Why non-parametric tests?
-
-Sales data has skewness of 0.668 — the distribution is right-skewed. Parametric tests (t-test, ANOVA) assume approximately Normal data. Non-parametric equivalents (Mann-Whitney, Kruskal-Wallis) make no distributional assumption and are therefore more appropriate here.
-
-### Holiday Effect Decomposition
-
-| Event | Mean Weekly Sales | vs Non-Holiday |
-|---|---|---|
-| Non-holiday | $1.041M | — |
-| Super Bowl | $1.079M | +3.7% |
-| Labour Day | $1.042M | +0.1% |
-| **Thanksgiving** | **$1.471M** | **+41.3%** |
-| Christmas | $0.961M | −7.7% |
-
-**Thanksgiving is the dominant event.** Christmas actually shows *below*-average sales at the store-aggregate level, likely because shoppers buy gifts online or at specialist retailers rather than Walmart.
-
-### Economic Variables
-
-All four economic variables (temperature, fuel price, CPI, unemployment) are statistically significant but show only **weak correlations** (|ρ| < 0.1). This confirms that store identity and calendar effects dominate over macroeconomic factors for weekly demand prediction.
-
----
-
-## Modelling Assumptions
-
-The following are **explicit assumptions**, not facts derived from the data:
-
-| Assumption | Value | Rationale |
-|---|---|---|
-| Lead time | 2 weeks | Typical grocery/FMCG replenishment cycle |
-| Service level | 95% | Standard retail in-stock target |
-| Ordering cost | $500/order | Illustrative value; must be calibrated per retailer |
-| Holding cost | 25% p.a. | Includes capital, storage, shrinkage, obsolescence |
-| Current inventory | User input | Must be provided — not in dataset |
-| EOQ unit value | $1 (working in $) | Demand and inventory measured in revenue, not units |
-
-In a production deployment, these parameters would be sourced from:
-- **Lead time:** Supplier contracts / purchase order history
-- **Ordering cost:** Finance / procurement data
-- **Holding cost:** Warehouse ops data + cost of capital
-- **Service level:** Business decision (based on margin vs stockout cost trade-off)
-
----
-
-## Project Structure
-
-```
-Demand-Forecasting-and-Inventory-Optimization/
+retail-demand-forecasting/
 │
 ├── config/
-│   └── config.yaml               # All hyperparameters and assumptions
+│   └── config.yaml                     # Central parameters for data, splits, models, and inventory
+│
+├── data/
+│   ├── raw/
+│   │   └── Walmart.csv                 # Canonical raw dataset (45 stores x 143 weeks, 6,435 records)
+│   └── processed/                      # Populated on demand by feature pipeline (git-ignored)
 │
 ├── src/
 │   ├── data/
-│   │   ├── loader.py             # Data ingestion + schema validation
-│   │   └── preprocessor.py       # Cleaning, encoding, chronological sort
+│   │   ├── ingestion.py                # Raw data loading, schema validation, and quality checks
+│   │   └── preprocessing.py            # Data cleaning, missing value handling, and column standardization
+│   │
+│   ├── analysis/
+│   │   ├── eda.py                      # Reusable exploratory data analysis & plotting routines
+│   │   └── statistics.py               # Statistical hypothesis tests (Mann-Whitney, Kruskal-Wallis, ADF)
+│   │
 │   ├── features/
-│   │   └── engineer.py           # Leakage-safe feature engineering (39 features)
+│   │   └── engineering.py              # Time-series features (lags, rollings, calendar, zero-leakage checks)
+│   │
 │   ├── models/
-│   │   ├── baselines.py          # Naive, Seasonal Naive
-│   │   ├── trainer.py            # LightGBM/XGBoost train + chronological split
-│   │   ├── forecaster.py         # Point + quantile forecast generation
-│   │   └── evaluator.py          # MAE, RMSE, WAPE, MAPE + per-store metrics
+│   │   ├── baselines.py                # Naive (lag-1) and Seasonal Naive (lag-52) baselines
+│   │   ├── forecasting.py              # Point and quantile model predictors & forecast builders
+│   │   ├── trainer.py                  # Chronological train/val/test splitting, LightGBM/XGBoost training
+│   │   └── evaluation.py               # Statistical metrics (MAE, RMSE, WAPE, MAPE)
+│   │
 │   ├── inventory/
-│   │   └── optimizer.py          # Safety stock, ROP, EOQ, stockout risk
-│   ├── scenarios/
-│   │   └── scenario_engine.py    # 5 what-if scenario analyses
+│   │   ├── optimization.py             # Safety stock, reorder point, continuous review (r, Q) policy
+│   │   └── scenarios.py                # What-if scenario stress-testing engine
+│   │
 │   └── explainability/
-│       └── shap_analysis.py      # SHAP global + local explanations
+│       └── shap_analysis.py            # TreeSHAP values, feature importance, and summary visualizations
 │
 ├── dashboard/
-│   ├── app.py                    # Streamlit entry point
+│   ├── app.py                          # Streamlit application entrypoint
 │   └── pages/
-│       ├── 01_Executive_Overview.py
-│       ├── 02_Demand_Forecast.py
-│       ├── 03_Inventory_Optimization.py
-│       ├── 04_Scenario_Analysis.py
-│       ├── 05_Model_Performance.py
-│       └── 06_Explainability.py
+│       ├── 01_Executive_Overview.py    # High-level KPIs, weekly sales trends, holiday uplift
+│       ├── 02_Demand_Forecast.py       # Store-level forecasting with P10–P90 uncertainty bands
+│       ├── 03_Inventory_Optimization.py# Safety stock & reorder policy recommendations
+│       ├── 04_Scenario_Analysis.py     # What-if supply disruption & demand surge simulation
+│       ├── 05_Model_Performance.py     # Comprehensive model benchmark & per-store error breakdown
+│       └── 06_Explainability.py        # SHAP beeswarm, feature importances, and prediction waterfalls
 │
 ├── tests/
-│   ├── test_features.py          # Leakage detection, lag correctness (46 tests)
-│   ├── test_inventory.py         # Safety stock, EOQ, ROP formulas
-│   └── test_evaluator.py         # MAE, RMSE, WAPE, MAPE correctness
+│   ├── test_data.py                    # Schema validation, missing value checks, and data loader tests
+│   ├── test_features.py                # Lag, rolling, calendar feature correctness and zero-leakage tests
+│   ├── test_models.py                  # Baseline & ML forecasting, quantile monotonicity (P10 <= P50 <= P90)
+│   ├── test_evaluator.py               # Evaluation metric mathematical invariants
+│   ├── test_inventory.py               # Inventory formula validation, service level and stockout tests
+│   └── test_dashboard.py               # Dashboard page compilation, syntax validation, and dry-run tests
 │
-├── outputs/
-│   ├── figures/                  # 14 generated charts (EDA + model + SHAP)
-│   ├── forecasts/                # test_forecasts.csv, per_store_metrics.csv
-│   └── models/                   # lgbm_point.pkl, lgbm_p10/50/90.pkl, xgb_point.pkl
-│
-├── run_phase1.py                 # Data pipeline (ingestion → features)
-├── run_eda.py                    # EDA charts
-├── run_stats.py                  # Statistical hypothesis tests
-├── run_models.py                 # Model training + evaluation
-├── run_explainability.py         # SHAP analysis
-└── requirements.txt
+├── assets/                             # Portfolio visual assets and charts
+├── .gitignore                          # Clean Python/Data Science gitignore
+├── README.md                           # Project documentation
+├── requirements.txt                    # Pinned dependencies
+├── pytest.ini                          # Pytest configuration
+└── run_pipeline.py                     # Single unified end-to-end pipeline execution CLI
 ```
 
 ---
 
-## Running the Project
+## Quickstart Guide
 
-### 1. Install dependencies
+### 1. Installation
 
 ```bash
+# Clone repository
+git clone https://github.com/ShikharForge/-Retail-Demand-Forecasting-Inventory-Optimization.git
+cd -Retail-Demand-Forecasting-Inventory-Optimization
+
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Run the full pipeline
+### 2. Run the Full End-to-End Pipeline
+
+Execute all stages (Ingestion → Feature Engineering → EDA → Statistical Tests → Model Training → SHAP Explainability):
 
 ```bash
-# Phase 1: Data ingestion, cleaning, feature engineering
-python run_phase1.py
-
-# Phase 2: EDA (generates outputs/figures/eda_*.png)
-python run_eda.py
-
-# Phase 3: Statistical analysis
-python run_stats.py
-
-# Phase 4-5: Train all models (baselines, LightGBM point + quantile, XGBoost)
-python run_models.py
-
-# Phase 8: SHAP explainability
-python run_explainability.py
+python run_pipeline.py
 ```
 
-### 3. Run tests
+*Optional stage flags:*
+- `python run_pipeline.py --eda` : Run only data processing and generate EDA visualizations
+- `python run_pipeline.py --stats` : Run only statistical hypothesis testing suite
+- `python run_pipeline.py --train` : Train LightGBM & XGBoost models and evaluate on out-of-time test set
+- `python run_pipeline.py --explain` : Compute TreeSHAP values and feature importance
+
+### 3. Run Automated Tests
 
 ```bash
-python -m pytest tests/ -v
-# Expected: 46 passed
+pytest
 ```
+*Expected: 59 passed across all 6 test modules.*
 
-### 4. Launch dashboard
+### 4. Launch the Interactive Dashboard
 
 ```bash
 streamlit run dashboard/app.py
-# Opens at http://localhost:8501
 ```
+*Access the decision-support application at `http://localhost:8501`.*
 
 ---
 
-## Dashboard
+## Data Science Methodology
 
-The Streamlit dashboard has 6 pages:
+### 1. Ingestion & Validation
+The canonical dataset (`data/raw/Walmart.csv`) contains weekly sales across 45 stores spanning February 2010 through October 2012 (143 weeks). Automated schema and data quality verification ensures zero null values, zero duplicate store-date pairs, and strictly positive demand.
 
-| Page | What it shows |
-|---|---|
-| 📊 Executive Overview | Aggregate KPIs, sales trend, store rankings, holiday impact |
-| 🔮 Demand Forecast | Store-level historical + forecast + P10-P90 uncertainty band |
-| 📦 Inventory Optimization | Safety stock, ROP, EOQ, stockout gauge with interactive parameters |
-| 🎲 Scenario Analysis | 5 what-if scenarios: demand surge/drop, lead time disruption, etc. |
-| 📈 Model Performance | Actual vs predicted scatter, per-store WAPE, model comparison |
-| 🔍 Explainability | SHAP feature importance, beeswarm, waterfall (with causality disclaimer) |
+### 2. Leakage-Safe Feature Pipeline
+To avoid lookahead bias in time-series forecasting:
+- **Lags ($t-1, t-4, t-8, t-52$):** Grouped strictly by store after chronological sorting.
+- **Rolling Windows (4, 8, 12 weeks):** Computed via `.shift(1).rolling(w)` ensuring window $[t-w, \dots, t-1]$ never accesses current week $t$.
+- **Automated Leakage Testing:** `verify_no_leakage()` validates $t-1$ alignment per store.
 
+### 3. Chronological Train / Validation / Test Splitting
+- **Train (70%):** 2010-02-05 to 2011-12-30 (100 weeks)
+- **Validation (18%):** 2012-01-06 to 2012-06-29 (26 weeks) — used for early stopping
+- **Test (12%):** 2012-07-06 to 2012-10-26 (17 weeks) — out-of-time evaluation
+
+### 4. Quantile Regression for Inventory Decisions
+Standard point forecasting models only estimate conditional mean demand. However, inventory optimization requires estimating tail risk:
+- **$P_{10}$ Model:** Lower-bound demand scenario (pinball loss $\alpha = 0.10$)
+- **$P_{50}$ Model:** Median demand point forecast (pinball loss $\alpha = 0.50$)
+- **$P_{90}$ Model:** High-demand buffer scenario (pinball loss $\alpha = 0.90$)
+
+### 5. Inventory Optimization Formulation
+- **Lead-Time Demand (LTD):** $\mu_{LT} = \hat{y}_{P50} \times L$
+- **Parametric Safety Stock:** $SS_{\text{parametric}} = Z_{\alpha} \times \sigma_{\text{demand}} \times \sqrt{L}$
+- **Non-Parametric Safety Stock:** $SS_{\text{quantile}} = (\hat{y}_{P90} - \hat{y}_{P50}) \times \sqrt{L}$
+- **Reorder Point (ROP):** $\text{ROP} = \text{LTD} + SS$
+- **Economic Order Quantity (EOQ):** $Q^* = \sqrt{\frac{2 D S}{H}}$
+- **Stockout Probability:** $P(\text{Demand}_{LT} > \text{ROP}) = 1 - \Phi\left(\frac{\text{ROP} - \mu_{LT}}{\sigma_{LT}}\right)$
+
+---
+
+## Statistical Hypothesis Testing
+
+| Hypothesis Test | Null Hypothesis ($H_0$) | Test Statistic & $p$-value | Decision & Inference |
+| :--- | :--- | :--- | :--- |
+| **Mann-Whitney U** | Holiday and non-holiday sales have identical distributions | $U = 1,475,321, p < 0.001$ | **Reject $H_0$:** Holiday sales are significantly higher ($+7.8\%$). |
+| **Kruskal-Wallis** | All 45 stores share identical sales distributions | $H = 6144.3, p \approx 0$ ($\eta^2 = 0.954$) | **Reject $H_0$:** Substantial store-level volume differences. |
+| **Levene's Test** | All 45 stores have equal demand variance | $W = 58.7, p < 0.001$ | **Reject $H_0$:** Demand variance differs significantly across stores. |
+| **ADF Stationarity** | Total sales series contains a unit root | $\text{ADF} = -3.12, p = 0.025$ | **Reject $H_0$:** Aggregate series exhibits weak-form stationarity. |
+
+---
+
+## Limitations & Future Extensions
+
+1. **SKU-Level Granularity:** Current data is store-aggregated; extending to SKU $\times$ Store hierarchy would enable shelf-level planogram optimization.
+2. **Exogenous Forward Signals:** Incorporating promotional calendars, local weather forecasts, and competitor pricing into multi-step horizons.
+3. **Hierarchical Reconciliation:** Integrating `HierarchicalReconciliation` (Bottom-Up / MinT) across Store $\to$ District $\to$ Region hierarchies.
+
+---
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

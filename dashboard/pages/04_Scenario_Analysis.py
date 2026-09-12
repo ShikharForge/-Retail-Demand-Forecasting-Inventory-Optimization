@@ -21,7 +21,8 @@ def load_data():
     df_raw = load_raw_data(config)
     df = build_features(clean(df_raw, config), config)
     df['store'] = df['store'].astype('category')
-    fc = pd.read_csv('outputs/forecasts/test_forecasts.csv', parse_dates=['date'])
+    fc_path = Path('outputs/forecasts/test_forecasts.csv')
+    fc = pd.read_csv(fc_path, parse_dates=['date']) if fc_path.exists() else None
     return df, fc, config
 
 df, fc, config = load_data()
@@ -29,6 +30,10 @@ df, fc, config = load_data()
 st.title("🎲 What-If Scenario Analysis")
 st.markdown("*Test how demand shocks and supply disruptions affect your inventory policy*")
 st.divider()
+
+if fc is None:
+    st.warning("⚠️ Forecast artifacts not found in `outputs/forecasts/`. Please run `python run_pipeline.py` to generate forecasts and model artifacts.")
+    st.stop()
 
 with st.sidebar:
     st.header("⚙️ Base Parameters")

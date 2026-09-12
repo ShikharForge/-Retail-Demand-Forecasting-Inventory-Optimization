@@ -109,7 +109,7 @@ if importance is not None:
             st.info("SHAP waterfall not found.")
 
 else:
-    st.info("Run `python run_explainability.py` first to generate SHAP data.")
+    st.info("Run `python run_pipeline.py` first to generate SHAP explainability data.")
 
 # ── Key insight box ────────────────────────────────────────────────────────
 with st.expander("📖 SHAP Key Findings & Business Implications"):

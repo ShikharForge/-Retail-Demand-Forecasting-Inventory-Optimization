@@ -21,13 +21,18 @@ def load_data():
     df_raw = load_raw_data(config)
     df = build_features(clean(df_raw, config), config)
     df['store'] = df['store'].astype('category')
-    fc = pd.read_csv('outputs/forecasts/test_forecasts.csv', parse_dates=['date'])
+    fc_path = Path('outputs/forecasts/test_forecasts.csv')
+    fc = pd.read_csv(fc_path, parse_dates=['date']) if fc_path.exists() else None
     return df, fc, config
 
 df, fc, config = load_data()
 
 st.title("📦 Inventory Optimization")
 st.markdown("*Convert demand forecasts into statistically grounded inventory decisions*")
+
+if fc is None:
+    st.warning("⚠️ Forecast artifacts not found in `outputs/forecasts/`. Please run `python run_pipeline.py` to generate forecasts and model artifacts.")
+    st.stop()
 
 # ── Assumption Warning ─────────────────────────────────────────────────────
 st.warning("""

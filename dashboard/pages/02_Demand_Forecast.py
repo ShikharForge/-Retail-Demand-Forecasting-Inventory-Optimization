@@ -22,7 +22,8 @@ def load_all():
     df = build_features(clean(df_raw, config), config)
     df['store'] = df['store'].astype('category')
     _, _, test_df = chronological_split(df, config)
-    fc = pd.read_csv('outputs/forecasts/test_forecasts.csv', parse_dates=['date'])
+    fc_path = Path('outputs/forecasts/test_forecasts.csv')
+    fc = pd.read_csv(fc_path, parse_dates=['date']) if fc_path.exists() else None
     return df, test_df, fc, config
 
 df, test_df, fc, config = load_all()
@@ -42,6 +43,10 @@ models = load_models()
 st.title("🔮 Demand Forecast")
 st.markdown("*Historical sales + LightGBM forecast with P10–P90 uncertainty bands*")
 st.divider()
+
+if fc is None:
+    st.warning("⚠️ Forecast artifacts not found in `outputs/forecasts/`. Please run `python run_pipeline.py` to generate forecasts and model artifacts.")
+    st.stop()
 
 # ── Sidebar Controls ──────────────────────────────────────────────────────
 with st.sidebar:
