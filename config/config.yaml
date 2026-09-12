@@ -1,0 +1,100 @@
+# ============================================================
+# Retail Demand Forecasting & Inventory Optimization
+# Central Configuration File
+# ============================================================
+
+# ----- Data -----
+data:
+  raw_path: "data/raw/Walmart.csv"
+  processed_path: "data/processed/walmart_features.parquet"
+  date_column: "Date"
+  target_column: "Weekly_Sales"
+  store_column: "Store"
+  holiday_column: "Holiday_Flag"
+  date_format: "%d-%m-%Y"
+
+# ----- Train / Validation / Test Splits -----
+splits:
+  train_end: "2011-12-30"
+  val_end:   "2012-06-29"
+  # test: everything after val_end
+
+# ----- Feature Engineering -----
+features:
+  lags: [1, 4, 8, 52]              # lag in weeks
+  rolling_windows: [4, 8, 12]       # rolling window sizes in weeks
+  store_as_categorical: true
+
+# ----- Walk-Forward Cross-Validation -----
+walk_forward:
+  step_weeks: 4                     # predict 4 weeks at a time
+  min_train_weeks: 52               # minimum training history
+
+# ----- Models -----
+models:
+  lgbm:
+    objective: "regression"
+    num_leaves: 63
+    learning_rate: 0.05
+    n_estimators: 500
+    min_child_samples: 10
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+    verbose: -1
+
+  lgbm_quantile:
+    objective: "quantile"
+    num_leaves: 63
+    learning_rate: 0.05
+    n_estimators: 500
+    min_child_samples: 10
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+    verbose: -1
+    quantiles: [0.10, 0.50, 0.90]
+
+  xgb:
+    objective: "reg:squarederror"
+    max_depth: 6
+    learning_rate: 0.05
+    n_estimators: 500
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+    verbosity: 0
+
+# ----- Evaluation -----
+evaluation:
+  primary_metric: "wape"
+  metrics: ["mae", "rmse", "wape", "mape"]
+  output_path: "outputs/forecasts/metrics.csv"
+
+# ----- Inventory Optimization (ASSUMPTIONS — not from data) -----
+# These are configurable business parameters, not observed values.
+inventory:
+  lead_time_weeks: 2              # ASSUMPTION: typical retail replenishment
+  service_level: 0.95            # ASSUMPTION: 95% target in-stock rate
+  ordering_cost_usd: 500.0       # ASSUMPTION: fixed cost per order (USD)
+  holding_cost_pct: 0.25         # ASSUMPTION: 25% of inventory value/year
+  weeks_per_year: 52
+
+# ----- Scenario Analysis -----
+scenarios:
+  demand_surge_pct: 0.20         # +20% demand shock
+  demand_drop_pct: 0.20          # -20% demand drop
+  lead_time_multiplier: 2.0      # lead time doubles
+  uncertainty_multiplier: 1.5    # wider uncertainty bands
+
+# ----- Output Paths -----
+outputs:
+  models_dir: "outputs/models"
+  forecasts_dir: "outputs/forecasts"
+  figures_dir: "outputs/figures"
+
+# ----- Dashboard -----
+dashboard:
+  default_store: 1
+  default_horizon_weeks: 8
+  page_title: "Retail Demand Forecasting & Inventory Optimization"
