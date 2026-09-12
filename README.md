@@ -400,35 +400,3 @@ The Streamlit dashboard has 6 pages:
 | 📈 Model Performance | Actual vs predicted scatter, per-store WAPE, model comparison |
 | 🔍 Explainability | SHAP feature importance, beeswarm, waterfall (with causality disclaimer) |
 
----
-
-## Interview Q&A
-
-### "Why a global panel model instead of 45 separate models?"
-
-The Kruskal-Wallis test (H=6,144, p≈0) confirms stores differ significantly — so the model must capture store heterogeneity. Rather than 45 separate training jobs, we include `store` as a categorical feature in a single global model. This enables **cross-store learning** (the model learns that all stores share the same seasonal shape), while the store feature allows it to learn store-specific demand levels. This approach scales better, requires less code, and typically improves predictions for smaller stores that benefit from information borrowed from larger stores.
-
-### "How do you prevent data leakage?"
-
-All lag and rolling features are computed per-store using `groupby('store').shift(1).rolling(w)`. This guarantees that at time t, only values from t-1 or earlier are used. We also have an automated `verify_no_leakage()` function that asserts `lag_1[i] == weekly_sales[i-1]` for every row and raises an `AssertionError` if any violation is found. This was run on all 45 stores and all 45 passed.
-
-### "Why WAPE instead of MAPE?"
-
-MAPE treats a 10% error on a $200K store the same as a 10% error on a $3M store. In retail, we care more about getting large-volume stores right. WAPE weights errors by volume: `WAPE = Σ|actual - forecast| / Σ|actual|`. It also avoids the instability of MAPE when actuals approach zero.
-
-### "Why quantile regression for inventory?"
-
-Standard regression gives you a single point forecast — the expected demand. But inventory decisions need to account for the *distribution* of possible demand outcomes. Safety stock protects against the *upper tail* of demand, not the expectation. Quantile regression lets us directly model P10, P50, and P90 with a single LightGBM model per quantile, without assuming a parametric form for the error distribution.
-
-### "Are the inventory parameters realistic?"
-
-No — and that's explicitly labelled throughout the codebase and dashboard. The Walmart dataset contains no inventory records, so parameters like lead time (2 weeks), ordering cost ($500), and holding cost (25%) are assumptions. In a real deployment, these would come from supplier contracts, finance data, and warehouse operations data. The system is designed to accept any values via config sliders.
-
-### "How would you improve this in production?"
-
-1. **More data:** Product-level (SKU) rather than store-aggregate forecasts
-2. **External signals:** Weather forecasts, promotional calendars, web traffic
-3. **Hierarchical models:** Reconcile forecasts across store → region → national hierarchy (e.g., using `statsforecast` HierarchicalReconciliation)
-4. **Online learning:** Retrain weekly on rolling window as new data arrives
-5. **Causal inference:** Use difference-in-differences or synthetic controls to measure true promotional lift rather than observational correlation
-6. **Coverage calibration:** Use conformal prediction to guarantee the P10-P90 interval covers 80% of actuals
